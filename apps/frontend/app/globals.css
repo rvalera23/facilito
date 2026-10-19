@@ -1,0 +1,144 @@
+@import "tailwindcss";
+
+@source "../app/**/*.{js,ts,jsx,tsx,mdx}";
+@source "../components/**/*.{js,ts,jsx,tsx,mdx}";
+@custom-variant dark (&:where(.dark, .dark *));
+
+@layer base {
+  :root {
+    --font-sans: 'Quicksand', system-ui, -apple-system, sans-serif;
+    --color-primary: var(--primary-color, var(--accent-color, #ea580c));
+    --color-primary-hover: var(--accent-glow, #c2410c);
+    /* 🔥 Default oscuro facilito (antes #0f172a slate-800) */
+    --bg-color: #0b0f19;
+    --text-color: #f1f5f9;
+  }
+
+  body {
+    background-color: var(--bg-color);
+    color: var(--text-color);
+    /* ✅ ELIMINAR font-family global para que NO herede en páginas públicas */
+    transition: background-color 0.5s ease, color 0.5s ease;
+  }
+}
+
+/* 🔥 ANIMACIÓN BOUNCE-IN */
+@keyframes bounce-in {
+  0% {
+    transform: scale(0);
+    opacity: 0;
+  }
+  50% {
+    transform: scale(1.15);
+  }
+  70% {
+    transform: scale(0.95);
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+.animate-bounce-in {
+  animation: bounce-in 0.7s cubic-bezier(0.68, -0.55, 0.265, 1.55) forwards;
+}
+
+/* Barra de desplazamiento */
+::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--color-primary, #64748b) 50%, transparent);
+  border-radius: 9999px;
+  transition: background 0.2s ease;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--color-primary, #64748b) 80%, transparent);
+}
+
+/* 🔥🔥🔥 OCULTAR TODO LO RELACIONADO CON IVA 🔥🔥🔥 */
+/* Cuando la clase .hide-iva está en el html, se oculta todo */
+
+/* Badges de IVA */
+.hide-iva .iva-badge,
+.hide-iva .iva-label,
+.hide-iva .badge-iva,
+.hide-iva [class*="badge"][class*="iva"],
+.hide-iva .iva-tag,
+.hide-iva .product-iva-badge,
+.hide-iva .item-iva-badge {
+  display: none !important;
+}
+
+/* Desglose de IVA */
+.hide-iva .iva-desglose,
+.hide-iva .desglose-iva,
+.hide-iva .footer-iva-desglose,
+.hide-iva .iva-breakdown,
+.hide-iva .iva-section,
+.hide-iva .iva-container,
+.hide-iva .iva-info,
+.hide-iva .iva-display {
+  display: none !important;
+}
+
+/* Cualquier elemento que contenga "iva" en su clase o id */
+.hide-iva [class*="iva"]:not(input):not(button):not(label):not(select):not(option):not(textarea),
+.hide-iva [id*="iva"]:not(input):not(button):not(label):not(select):not(option):not(textarea),
+.hide-iva [class*="Iva"]:not(input):not(button):not(label):not(select):not(option):not(textarea),
+.hide-iva [id*="Iva"]:not(input):not(button):not(label):not(select):not(option):not(textarea) {
+  display: none !important;
+}
+
+/* 🔥 Ocultar específicamente el shimmer-text que usa el modal de éxito */
+.hide-iva .shimmer-text {
+  display: none !important;
+}
+
+/* 🔥 Ocultar elementos con clase text-iva */
+.hide-iva .text-iva {
+  display: none !important;
+}
+
+/* 🔥 Ocultar el badge de "IVA Incluido" en el modal de éxito */
+.hide-iva .order-success-iva-badge {
+  display: none !important;
+}
+
+/* 🔥 Ocultar el desglose de IVA en el footer del carrito */
+.hide-iva .cart-footer-iva {
+  display: none !important;
+}
+
+/* 🔥 Ocultar el badge de IVA en el preview del producto */
+.hide-iva .product-preview-iva {
+  display: none !important;
+}
+
+/* 🔥 Ocultar cualquier elemento que tenga texto "IVA" como contenido (usando atributo data-iva) */
+.hide-iva [data-iva="true"] {
+  display: none !important;
+}
+
+/* 🔥 Ocultar badges que contengan "IVA" en su texto usando data attributes */
+.hide-iva [data-iva-text="IVA"],
+.hide-iva [data-iva-text="IVA Incluido"],
+.hide-iva [data-iva-text="IVA No Incluido"],
+.hide-iva [data-iva-text="Exento de IVA"] {
+  display: none !important;
+}
+
+/* 🔥 Padding responsive para Mi Cuenta en mobile */
+@media (max-width: 768px) {
+  .mi-cuenta-content {
+    padding: 12px !important;
+  }
+}

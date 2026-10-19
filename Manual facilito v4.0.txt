@@ -1,0 +1,2096 @@
+# Ir al final: Ctrl+End# Ir al final: Ctrl+End (o Ctrl+_ y escribir un número grande)📘 Manual Definitivo de Facilito — v4.0
+========================================
+
+Servidor: Facilito (móvil, cambia de IP según la red)
+Stack: Next.js 16 (Webpack, NO Turbopack) + NestJS + PostgreSQL + nginx + Docker
+Última actualización: 13/10/2026
+Versión del manual: 4.0
+
+________________________________________
+ÍNDICE
+________________________________________
+
+0.  Cómo trabajar con este proyecto (modo quirúrgico)
+1.  Arquitectura general
+2.  Los comandos principales (rebuild, restart, cambiar-IP)
+3.  Scripts disponibles y aliases
+4.  Sistema de autenticación
+5.  Base de datos
+6.  Escenarios de uso
+7.  Diagnóstico de problemas
+8.  Referencia técnica
+9.  Reglas de oro
+10. Cheat sheet
+11. Rediseño UCP — Fulfillment y Cobro a destino
+12. Roles y visibilidad en la UI
+13. Optimizaciones de performance (sesión 2026-10-13)
+14. Warnings conocidos y deuda técnica
+15. Historial de cambios
+
+________________________________________
+0. CÓMO TRABAJAR CON ESTE PROYECTO (MODO QUIRÚRGICO)
+________________________________________
+
+🎯 FILOSOFÍA
+
+Este proyecto se edita con "modo quirúrgico": cambios pequeños,
+verificables, reversibles, uno a la vez. NO se hacen cambios
+masivos "por las dudas" ni refactors grandes sin medición.
+
+La regla de oro es: si no lo medimos, no lo tocamos.
+
+📋 PROTOCOLO DE EDICIÓN
+
+Cada vez que se va a modificar código, se sigue este protocolo
+estricto:
+
+1. DIAGNÓSTICO PRIMERO (solo lectura)
+   - Greps, wc -l, sed -n, lectura de archivos.
+   - Nada de tocar hasta entender el problema.
+   - Si hay dudas, se pregunta antes de asumir.
+
+2. CAMBIOS QUIRÚRGICOS CON SELECCIÓN COMPLETA
+   - La IA (o el dev) le dice al humano:
+       "Seleccioná TODO este bloque (desde X hasta Y)."
+       "Reemplazalo por este otro bloque completo."
+   - NO se edita línea por línea en el medio.
+   - NO se dice "borrá esta línea y agregá esto acá".
+   - Siempre bloque completo, principio a fin.
+
+   ¿Por qué? Porque reduce errores de sintaxis, evita que se
+   pierdan líneas en el medio, y hace el cambio reversible: si
+   algo sale mal, el bloque viejo era una unidad, no un
+   fragmento.
+
+3. BACKUP ANTES DE CADA CAMBIO ESTRUCTURAL
+   - cp archivo archivo.bak-<nombre-fase>
+   - Ejemplo: AdminSidebar.tsx.bak-fase1
+   - Los backups se dejan hasta que el cambio está confirmado
+     funcionando en producción.
+
+4. UN CAMBIO, UN REBUILD, UNA VERIFICACIÓN
+   - No se acumulan cambios sin rebuildear entre medio.
+   - Rebuild → Ctrl+Shift+R → verificar → próximo cambio.
+   - Si un cambio se siente "mucho mejor", se mide con
+     React DevTools / Performance antes de seguir.
+
+5. VERIFICACIÓN CON GREP DESPUÉS DEL CAMBIO
+   - No se confía en "quedó bien" sin comprobar.
+   - grep -n "<lo que cambió>" archivo
+   - Se compara antes vs después.
+
+6. Ctrl+Shift+R DESPUÉS DE CADA REBUILD
+   - El navegador cachea chunks agresivamente.
+   - Sin recarga forzada, se ven builds viejos y da
+     falsos positivos/negativos.
+
+🖋️ REGLAS DE ESTILO
+
+- Cero emojis en la UI. Los emojis del código/comentarios
+  internos pueden quedar.
+- SVG heredados de lucide-react. No introducir librerías de
+  íconos nuevas.
+- Colores del tenant siempre (primary, secondary, etc.).
+  Nunca hardcodear colores de marca.
+- No crear archivos nuevos si se puede reusar lo existente.
+  Antes de crear un archivo, grep.
+- Nunca "te doy el archivo completo" salvo que sea un archivo
+  NUEVO.
+- Todo request autenticado del frontend usa apiFetch (no fetch
+  directo).
+- Todo logout usa performLogout (no localStorage.clear()).
+- Todo error de auth es 401 (no 400, no 500).
+- No romper la estética bajo ningún concepto. Si un cambio de
+  performance afecta la estética, se pregunta antes de aplicarlo.
+
+🎨 REGLA DE IMÁGENES (post-tienda)
+
+- <Image> de Next solo funciona con URLs absolutas o archivos
+  en public/.
+- URLs relativas (/uploads/...) rompen <Image> con 400.
+- En esos casos, usar <img> nativo.
+- Esto se descubrió optimizando la tienda pública y se aplica
+  a todo el proyecto.
+
+🔒 REGLAS DE ORO DEL AUTH
+
+1. NUNCA devolver password, totpSecret, failedLoginAttempts,
+   lockedUntil, emailVerifiedAt, lastLoginAt, lastLoginIp al
+   frontend. Usar toPublicUser().
+2. NUNCA decodificar JWT con jwt.decode() en un controller.
+   Usar req.user (ya validado por AuthGuard/JwtStrategy).
+3. TODO logout debe llamar a performLogout() de
+   lib/auth/logout.ts. NO usar localStorage.clear().
+4. TODO request autenticado del frontend debe usar apiFetch()
+   de lib/api.ts. NO usar fetch directo.
+5. TODO error de auth debe ser 401, no 400 ni 500. Los 401
+   activan el refresh automático.
+6. NUNCA loguear tokens, passwords, ni secrets.
+7. TODO cambio de password/reset/2FA-disable debe revocar
+   todos los refresh tokens del user.
+8. NUNCA rotar JWT_SECRET sin doble validación (_NEW + _OLD)
+   y ventana de 15 min.
+9. TODO nuevo endpoint autenticado debe estar en
+   AuthMiddleware.forRoutes o tener
+   @UseGuards(AuthGuard('jwt')).
+10. TODA acción sensible (login, reset, 2FA, cambio de rol)
+    debe quedar registrada en auth_events.
+11. Usar isBuyer(), isDriver(), isProfessional() de
+    lib/roles.ts para condicionar acciones por rol.
+12. El nombre del evento de logout es authChange (SIN "d").
+    No confundir con authChanged.
+
+🛑 LO QUE NO SE TOCA SIN RAZÓN
+
+- /etc/nginx/sites-available/facilito
+- /opt/facilito/apps/frontend/next.config.ts
+- /opt/facilito/apps/frontend/.env.local
+- /opt/facilito/apps/frontend/package.json
+- /etc/systemd/system/facilito-frontend.service*
+- /opt/facilito/apps/backend/.env
+
+Si hay que tocar alguno de estos, se avisa explícitamente y se
+justifica por qué.
+
+________________________________________
+1. ARQUITECTURA GENERAL
+________________________________________
+
+🏗️ Componentes
+
+┌──────────────────────────────────────────────────────────────┐
+│                        NAVEGADOR                              │
+│              https://<IP_ACTUAL_DEL_SERVIDOR>/                │
+└──────────────────────────┬───────────────────────────────────┘
+                           │
+                           ▼
+┌──────────────────────────────────────────────────────────────┐
+│                     NGINX (puerto 443 HTTPS)                 │
+│  - server_name _ (acepta cualquier IP/hostname)              │
+│  - cert: /etc/nginx/certs/facilito.pem (mkcert)              │
+│  - reescribe /api/ → /                                       │
+└──────────┬─────────────────────────┬─────────────────────────┘
+           │                         │
+           │ /api/*                  │ /  (todo lo demás)
+           │ /uploads/*              │ /_next/*
+           │ /socket.io/*            │
+           ▼                         ▼
+┌─────────────────────┐   ┌─────────────────────────────────────┐
+│  BACKEND (NestJS)   │   │  FRONTEND (Next.js 16 + Webpack)    │
+│  Puerto 3000        │   │  Puerto 3001                         │
+│  Express + Postgres │   │  Node.js + React                     │
+│  + JWT Auth + 2FA   │   │  + apiFetch con refresh auto         │
+└─────────────────────┘   └─────────────────────────────────────┘
+           │                         │
+           └────────────┬────────────┘
+                        │
+                        ▼
+              ┌─────────────────────┐
+              │  POSTGRES (Docker)  │
+              │  facilito_postgres  │
+              │  DB: facilito_db    │
+              └─────────────────────┘
+
+📁 Rutas importantes
+
+| Componente              | Ruta                                                    |
+|-------------------------|---------------------------------------------------------|
+| Proyecto frontend       | /opt/facilito/apps/frontend/                            |
+| Proyecto backend        | /opt/facilito/apps/backend/                             |
+| Config nginx            | /etc/nginx/sites-available/facilito                     |
+| Cert SSL                | /etc/nginx/certs/facilito.pem                           |
+| Scripts útiles          | /opt/facilito/*.sh (los clásicos)                       |
+| Scripts nuevos          | /opt/facilito/scripts/*.sh (los 12 nuevos)              |
+| Backups                 | /opt/facilito/backups/                                  |
+| Manuales archivados     | /opt/facilito/manuales/                                 |
+| Logs frontend (stdout)  | /var/log/facilito-frontend.log                          |
+| Logs frontend (stderr)  | /var/log/facilito-frontend.error.log                    |
+| Logs systemd frontend   | journalctl -u facilito-frontend.service                 |
+| Logs systemd backend    | journalctl -u facilito-backend.service                  |
+| Log rebuild frontend    | /tmp/rebuild.log                                        |
+| Log rebuild backend     | /tmp/rebuild-backend.log                                |
+
+🔧 Servicios systemd
+
+| Servicio              | Puerto | Ver estado                                    |
+|-----------------------|--------|-----------------------------------------------|
+| facilito-backend      | 3000   | systemctl status facilito-backend.service     |
+| facilito-frontend     | 3001   | systemctl status facilito-frontend.service    |
+| nginx                 | 80/443 | systemctl status nginx                        |
+| postgres              | 5432   | docker ps \| grep postgres                    |
+
+🔑 Variables clave (NO tocar sin razón)
+
+.env.local del frontend:
+  NEXT_PUBLIC_API_URL=/api   # Relativo, no IP
+
+next.config.ts:
+  typescript: { ignoreBuildErrors: true },
+  images: {
+    remotePatterns: [
+      { protocol: 'https', hostname: '**' },
+      { protocol: 'http',  hostname: '**' },
+    ],
+  },
+
+package.json (frontend):
+  "scripts": {
+    "build": "next build --webpack",
+    "start": "next start"
+  }
+
+.env del backend:
+  DATABASE_HOST=facilito_postgres
+  DATABASE_PORT=5432
+  DATABASE_USER=facilito_admin
+  DATABASE_PASSWORD=<password>
+  DATABASE_NAME=facilito_db
+  PORT=3000
+
+  JWT_SECRET=<96 hex>
+  JWT_REFRESH_SECRET=<96 hex>
+  JWT_RESET_SECRET=<96 hex>
+  JWT_VERIFY_SECRET=<96 hex>
+  ENCRYPTION_KEY=<64 hex>
+  JWT_ACCESS_EXPIRES=15m
+  JWT_REFRESH_EXPIRES=30d
+
+  RESEND_API_KEY=
+  RESEND_FROM_EMAIL=
+  APP_URL=https://<IP_ACTUAL>
+  CORS_ORIGINS=https://<IP_ACTUAL>
+
+________________________________________
+2. LOS COMANDOS PRINCIPALES
+________________________________________
+
+🟢 Comando 1: Rebuild frontend
+
+  /opt/facilito/rebuild.sh
+
+Qué hace:
+  1. Para el servicio facilito-frontend
+  2. Mata procesos zombie en puerto 3001
+  3. Borra .next (build viejo)
+  4. Rebuild con Webpack (~25-30s)
+  5. Verifica que el .next/BUILD_ID exista
+  6. Arranca el servicio
+  7. Healthcheck con reintentos (8 intentos, 1s cada uno)
+  8. Muestra: puerto escuchando, chunks sirviendo vs disco, Build ID
+  9. Imprime bloque de "📋 COMANDOS ÚTILES"
+
+Cuándo usarlo:
+  - Editaste algún archivo .tsx, .ts, .js, .css del frontend
+  - Cambiaste algo en next.config.ts
+  - Cambiaste algo en package.json
+  - El frontend se ve raro / no carga
+
+Tiempo: ~40 segundos.
+Después: Ctrl+Shift+R en el navegador.
+
+________________________________________
+🟢 Comando 2: Rebuild backend
+
+  /opt/facilito/rebuild-backend.sh
+
+Qué hace:
+  1. Para el servicio facilito-backend
+  2. Mata procesos zombie en puerto 3000
+  3. Borra dist/ (build viejo)
+  4. Rebuild con Nest (pnpm run build)
+  5. Verifica que dist/main.js exista
+  6. Arranca el servicio
+  7. Healthcheck con reintentos (8 intentos, 1s cada uno)
+  8. Muestra: puerto escuchando, dist/main.js en disco
+  9. Imprime bloque de "📋 COMANDOS ÚTILES"
+
+Cuándo usarlo:
+  - Editaste cualquier archivo .ts en apps/backend/src/
+  - Cambiaste algo en .env del backend
+  - Tocaste módulos de auth, DB, controllers, services
+  - El backend devuelve 500 o no responde
+
+Tiempo: ~30 segundos.
+
+________________________________________
+🟡 Comando 3: Cambiar de IP
+
+PASO 1 — Averiguar la IP actual:
+  hostname -I
+
+PASO 2 — Cambiar la IP:
+  /opt/facilito/cambiar-ip.sh <NUEVA_IP>
+
+Qué hace:
+  1. Regenera el cert SSL con la nueva IP en el SAN
+  2. Verifica que nginx tenga server_name _; (lo corrige si no)
+  3. Verifica que .env.local tenga NEXT_PUBLIC_API_URL=/api
+  4. Para el frontend, mata zombies, lo reinicia limpio
+  5. Muestra resumen: SAN del cert, puerto 3001, test HTTPS
+
+Cuándo usarlo:
+  - Moviste el servidor de red/WiFi
+  - La IP del servidor cambió
+  - Vas a hacer una demo en otra red
+
+Tiempo: ~15 segundos.
+
+PASO 3 — Abrir el navegador:
+  https://<NUEVA_IP>/
+
+⚠️ NO toca:
+  - La base de datos (URLs relativas)
+  - .env.local (ya es relativo)
+  - next.config.ts (acepta cualquier host)
+  - El código del frontend
+
+________________________________________
+🔴 Comando 4: Reiniciar servicio (sin rebuild)
+
+  # Frontend:
+  systemctl restart facilito-frontend.service
+
+  # Backend:
+  systemctl restart facilito-backend.service
+
+O con los scripts nuevos (recomendado):
+  rf    # restart frontend con healthcheck
+  rb    # restart backend con healthcheck
+
+Qué hace: solo reinicia el servicio, sin tocar el build.
+
+Cuándo usarlo:
+  - El servicio se colgó pero NO cambiaste código
+  - Querés reiniciar rápido sin rebuild
+
+Tiempo: ~5 segundos.
+
+________________________________________
+3. SCRIPTS DISPONIBLES Y ALIASES
+________________________________________
+
+🎯 FILOSOFÍA
+
+Todos los scripts comparten el mismo diseño:
+  - Sanity checks al inicio (¿existe la carpeta? ¿hay conexión?)
+  - Pasos numerados [N/M] con colores
+  - Healthcheck con reintentos (8 intentos × 1s) cuando aplica
+  - Verificación del resultado
+  - Bloque final con comandos útiles
+
+Los scripts están en /opt/facilito/scripts/.
+Los aliases están en ~/.bashrc.
+
+📋 TABLA COMPLETA
+
+| Alias    | Script                     | Función                                          |
+|----------|----------------------------|--------------------------------------------------|
+| diag     | diagnose.sh                | Diagnóstico completo de servicios                |
+| rf       | restart-frontend.sh        | Restart frontend + healthcheck                   |
+| rb       | restart-backend.sh         | Restart backend + healthcheck                    |
+| logs     | logs.sh <fe\|be> [N]       | Ver logs del frontend o backend                  |
+| db       | db.sh                      | Abrir psql interactivo                           |
+| q        | db-query.sh "<SQL>"        | Ejecutar query SQL                               |
+| bkdb     | backup-db.sh               | Backup de la DB con timestamp                    |
+| bkfull   | backup-full.sh             | Backup completo (DB + apps + nginx)              |
+| unlock   | unlock-user.sh <email>     | Desbloquear usuario                              |
+| no2fa    | disable-2fa.sh <email>     | Desactivar 2FA                                   |
+| fixapi   | fix-double-api.sh          | Corregir /api/api/ en tenants                    |
+| hc       | healthcheck.sh             | Test rápido (nginx + backend + frontend + DB)    |
+
+🛠️ LOS SCRIPTS CLÁSICOS (de /opt/facilito/)
+
+| Script                    | Función                                  | Cuándo                              |
+|---------------------------|------------------------------------------|-------------------------------------|
+| rebuild.sh                | Rebuild + restart frontend               | Después de tocar código frontend    |
+| rebuild-backend.sh        | Rebuild + restart backend                | Después de tocar código backend     |
+| cambiar-ip.sh <IP>        | Cambiar de red/IP                        | Al mover el servidor                |
+| restart-limpio.sh         | Restart con limpieza de zombies          | Si el frontend se cuelga            |
+
+📖 EJEMPLOS DE USO
+
+Diagnóstico rápido:
+  hc
+
+Diagnóstico completo:
+  diag
+
+Ver logs del frontend (últimas 30 líneas por defecto):
+  logs frontend
+
+Ver logs del backend (últimas 50 líneas):
+  logs backend 50
+
+Consultar la DB:
+  q "SELECT COUNT(*) FROM users;"
+  q "SELECT slug, name FROM tenants LIMIT 5;"
+
+Backup antes de un cambio importante:
+  bkdb
+  bkfull
+
+Desbloquear usuario:
+  unlock usuario@example.com
+
+Desactivar 2FA:
+  no2fa usuario@example.com
+
+Corregir /api/api/:
+  fixapi
+
+🛠️ VER CONTENIDO DE UN SCRIPT
+
+  cat /opt/facilito/scripts/diagnose.sh
+
+📝 MODIFICAR UN SCRIPT
+
+  nano /opt/facilito/scripts/diagnose.sh
+  # Guardar: Ctrl+O, Enter, Ctrl+X
+
+📝 AGREGAR UN ALIAS NUEVO
+
+  echo "alias miAlias='/opt/facilito/scripts/miScript.sh'" >> ~/.bashrc
+  source ~/.bashrc
+
+________________________________________
+4. SISTEMA DE AUTENTICACIÓN
+________________________________________
+
+Documentación viva del sistema de auth. Ver archivo
+"Auth System Facilito.md" para el detalle completo.
+
+📌 REGLAS DE ORO DEL AUTH (ver también sección 0)
+
+1. NUNCA devolver password, totpSecret, failedLoginAttempts,
+   lockedUntil, emailVerifiedAt, lastLoginAt, lastLoginIp
+   al frontend. Usar toPublicUser().
+2. NUNCA decodificar JWT con jwt.decode() en un controller.
+   Usar req.user.
+3. TODO logout debe llamar a performLogout() de
+   lib/auth/logout.ts. NO usar localStorage.clear().
+4. TODO request autenticado del frontend debe usar apiFetch()
+   de lib/api.ts. NO usar fetch directo.
+5. TODO error de auth debe ser 401, no 400 ni 500.
+6. NUNCA loguear tokens, passwords, ni secrets.
+7. TODO cambio de password/reset/2FA-disable debe revocar
+   todos los refresh tokens del user.
+8. NUNCA rotar JWT_SECRET sin doble validación (_NEW + _OLD)
+   y ventana de 15 min.
+9. TODO nuevo endpoint autenticado debe estar en
+   AuthMiddleware.forRoutes o tener @UseGuards(AuthGuard('jwt')).
+10. TODA acción sensible debe quedar en auth_events.
+11. Usar isBuyer(), isDriver(), isProfessional() de
+    lib/roles.ts.
+12. El nombre del evento de logout es authChange (SIN "d").
+
+🔐 FLUJOS RESUMIDOS
+
+| Flujo              | Endpoint                              | Notas                          |
+|--------------------|---------------------------------------|--------------------------------|
+| Registro           | POST /api/auth/register               | Password: 8+, mayús, minús, núm|
+| Login              | POST /api/auth/login                  | Throttle 5/15min. 2FA→requiresTwoFactor |
+| Login 2FA          | POST /api/auth/2fa/verify             | Verifica TOTP con otplib       |
+| Refresh            | POST /api/auth/refresh                | Rotativo: emite nuevo, revoca viejo |
+| Logout             | POST /api/auth/logout                 | Frontend usa performLogout()   |
+| Reset password     | POST /api/auth/forgot-password + reset| Token 15 min, revoca refresh   |
+| Verificación email | POST /api/auth/send-verification + GET| Token 24 h                     |
+| 2FA setup          | POST /api/auth/2fa/setup + verify-setup| 10 backup codes, AES-256-GCM  |
+| Sesiones activas   | GET/DELETE /api/auth/sessions         | Lista y revoca refresh tokens  |
+
+📊 RATE LIMITS
+
+| Endpoint                        | Límite | Ventana  |
+|---------------------------------|--------|----------|
+| POST /api/auth/login (por IP)   | 5      | 1 min    |
+| POST /api/auth/login (por cuenta)| 5     | 15 min   |
+| POST /api/auth/forgot-password  | 3      | 1 hora   |
+| POST /api/auth/send-verification| 3      | 1 hora   |
+| POST /api/auth/2fa/verify       | 10     | 1 min    |
+| Global (por IP)                 | 60     | 1 min    |
+
+🔄 ROTACIÓN DE JWT_SECRET
+
+Cuándo rotar:
+  - Sospecha de filtración
+  - Cada 6-12 meses por política
+  - Cuando un dev con acceso se va del equipo
+
+Procedimiento (sin cortar sesiones):
+  # 1. Generar nuevo (96 hex)
+  node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"
+
+  # 2. Editar .env del backend:
+  #    JWT_SECRET_NEW=<nuevo>
+  #    JWT_SECRET_OLD=<el-actual>
+  #    OJO: durante la rotación, JWT_SECRET no debe existir
+
+  # 3. Rebuild + restart backend
+  /opt/facilito/rebuild-backend.sh
+
+  # 4. Verificar doble validación (token nuevo y viejo → 200)
+
+  # 5. Esperar 15 min (vida del access token)
+
+  # 6. Consolidar: JWT_SECRET=<el-nuevo>, borrar _NEW y _OLD
+
+  # 7. Rebuild + restart
+  /opt/facilito/rebuild-backend.sh
+
+🌐 ENDPOINTS DE AUTH
+
+Públicos:
+  GET  /api/auth/check-email?email=
+  POST /api/auth/register
+  POST /api/auth/login
+  POST /api/auth/refresh
+  POST /api/auth/forgot-password
+  POST /api/auth/reset-password
+  POST /api/auth/2fa/verify
+  POST /api/auth/2fa/backup-code
+  GET  /api/auth/verify-email?token=
+
+Autenticados (@UseGuards(AuthGuard('jwt'))):
+  GET    /api/auth/context
+  POST   /api/auth/logout
+  POST   /api/auth/change-password
+  POST   /api/auth/send-verification
+  POST   /api/auth/2fa/setup
+  POST   /api/auth/2fa/verify-setup
+  POST   /api/auth/2fa/disable
+  GET    /api/auth/2fa/status
+  GET    /api/auth/sessions
+  DELETE /api/auth/sessions/:id
+  DELETE /api/auth/sessions
+  GET/PUT/DELETE /api/auth/me/location
+
+👥 ROLES Y VISIBILIDAD
+
+Ver sección 12 para el detalle completo.
+Helpers en lib/roles.ts: isBuyer, isDriver, isSeller, isProfessional.
+
+________________________________________
+5. BASE DE DATOS
+________________________________________
+
+🗄️ TABLAS PRINCIPALES
+
+users (campos de auth):
+  - id, email, password (bcrypt, 10 rounds)
+  - emailVerified, emailVerifiedAt
+  - failedLoginAttempts, lockedUntil
+  - lastLoginAt, lastLoginIp
+  - totpSecret (AES-256-GCM), totpEnabled
+
+refresh_tokens:
+  - id, userId, tokenHash (SHA-256), expiresAt (30d)
+  - revokedAt, replacedByTokenId (rotación)
+  - lastUsedAt, ip, userAgent, createdAt
+
+auth_events:
+  - id, userId (nullable), eventType, ip, userAgent,
+    metadata (jsonb), createdAt
+
+password_resets: id, userId, tokenHash, expiresAt (15 min),
+  usedAt, ip, userAgent, createdAt
+
+email_verifications: igual pero expiresAt (24 h)
+
+backup_codes: id, userId, codeHash (SHA-256), usedAt, createdAt
+
+Eventos registrados en auth_events:
+  login_success, login_failed, logout,
+  password_reset_requested, password_reset_completed,
+  password_changed, email_verified,
+  refresh_token_used, refresh_token_revoked,
+  2fa_enabled, 2fa_disabled, 2fa_verified, account_locked,
+  order_delivery_updated_after_completion,
+  order_local_delivery_updated_after_completion.
+
+💾 BACKUP Y RESTAURACIÓN
+
+Con scripts (recomendado):
+  bkdb              # solo la DB
+  bkfull            # DB + apps + nginx
+
+Manualmente:
+  mkdir -p /opt/facilito/backups
+
+  docker exec facilito_postgres pg_dump -U facilito_admin facilito_db \
+    > /opt/facilito/backups/db_$(date +%Y%m%d_%H%M%S).sql
+
+  tar -czf /opt/facilito/backups/apps_$(date +%Y%m%d_%H%M%S).tar.gz \
+    --exclude='node_modules' --exclude='.next' --exclude='dist' \
+    /opt/facilito/apps
+
+  cp -r /etc/nginx/sites-available \
+    /opt/facilito/backups/nginx_$(date +%Y%m%d_%H%M%S)
+
+Restaurar DB:
+  docker exec -i facilito_postgres psql -U facilito_admin facilito_db \
+    < /opt/facilito/backups/db_YYYYMMDD_HHMMSS.sql
+
+Restaurar código:
+  tar -xzf /opt/facilito/backups/apps_YYYYMMDD_HHMMSS.tar.gz -C /
+
+Consultar con script:
+  q "SELECT COUNT(*) FROM users;"
+  q "SELECT slug, name FROM tenants LIMIT 5;"
+
+Abrir psql interactivo:
+  db
+  # dentro: \dt (tablas), \d tabla (estructura), \q (salir)
+
+________________________________________
+6. ESCENARIOS DE USO
+________________________________________
+
+🚀 ESCENARIO A: Demo a inversionistas (mover a otra red)
+
+  1. Conectar el servidor a la nueva red
+  2. Averiguar la nueva IP:
+       hostname -I
+  3. Cambiar la IP en Facilito:
+       /opt/facilito/cambiar-ip.sh 172.16.35.142
+  4. Abrir el navegador en:
+       https://172.16.35.142/
+
+Tiempo total: 30 segundos.
+NO toca: DB, .env, código, nginx manual, etc.
+
+________________________________________
+🛠️ ESCENARIO B: Editar código del frontend
+
+  1. Editar el archivo
+       nano /opt/facilito/apps/frontend/app/tienda/[slug]/components/StoreHero.tsx
+  2. Rebuild
+       /opt/facilito/rebuild.sh
+  3. Recargar navegador (Ctrl+Shift+R)
+
+Tiempo total: 1 minuto.
+
+________________________________________
+🔧 ESCENARIO C: Editar código del backend
+
+  1. Editar el archivo
+       nano /opt/facilito/apps/backend/src/modules/auth/auth.service.ts
+  2. Rebuild backend
+       /opt/facilito/rebuild-backend.sh
+  3. Verificar
+       systemctl status facilito-backend.service --no-pager | head -6
+       curl -I http://localhost:3000/
+
+Tiempo total: 30 segundos.
+
+________________________________________
+🔧 ESCENARIO D: Rotar JWT_SECRET (sin cortar sesiones)
+
+  1. Generar nuevo secret (96 hex)
+       node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"
+  2. Editar .env del backend
+       nano /opt/facilito/apps/backend/.env
+       # Agregar: JWT_SECRET_NEW=<nuevo>
+       #          JWT_SECRET_OLD=<el-actual>
+       # Comentar/borrar: JWT_SECRET=...
+  3. Rebuild backend
+       /opt/facilito/rebuild-backend.sh
+  4. Verificar doble validación (tokens viejos y nuevos → 200)
+  5. Esperar 15 min
+  6. Consolidar: JWT_SECRET=<el-nuevo>, borrar _NEW y _OLD
+  7. Rebuild backend
+       /opt/facilito/rebuild-backend.sh
+
+Tiempo total: ~20 min (incluida la espera).
+
+________________________________________
+🐛 ESCENARIO E: El frontend no responde (502 Bad Gateway)
+
+Diagnóstico:
+  diag
+  logs frontend 50
+  systemctl status facilito-frontend.service --no-pager | head -6
+
+Fix rápido:
+  rf                     # restart con healthcheck
+  # o si está roto de verdad:
+  /opt/facilito/rebuild.sh
+
+________________________________________
+🐛 ESCENARIO F: El backend no responde (500 / 502 en /api/*)
+
+Diagnóstico:
+  diag
+  logs backend 50
+  systemctl status facilito-backend.service --no-pager | head -6
+  curl -I http://localhost:3000/
+
+Fix rápido:
+  rb                          # restart con healthcheck
+  # o si está roto de verdad:
+  /opt/facilito/rebuild-backend.sh
+
+________________________________________
+🔄 ESCENARIO G: Volver a la red original
+
+  1. Conectar a la red original
+  2. Averiguar la IP:
+       hostname -I
+  3. Cambiar IP:
+       /opt/facilito/cambiar-ip.sh 172.16.16.122
+  4. Abrir en:
+       https://172.16.16.122/
+
+________________________________________
+💾 ESCENARIO H: Backup antes de demo importante
+
+  bkfull
+  # o al menos:
+  bkdb
+
+________________________________________
+🖥️ ESCENARIO I: Modo desarrollo (frontend, hot-reload)
+
+  1. Parar el servicio de producción
+       systemctl stop facilito-frontend.service
+  2. Ir al directorio
+       cd /opt/facilito/apps/frontend
+  3. Modo dev
+       pnpm dev
+
+Abrir: http://<IP_ACTUAL>:3000/
+
+⚠️ Modo dev NO usa HTTPS. Solo para desarrollo local.
+
+Cuando termines:
+  # Ctrl+C para parar el dev
+  systemctl start facilito-frontend.service
+
+________________________________________
+🩺 ESCENARIO J: Chequeo rápido antes de empezar a trabajar
+
+  1. hc         # healthcheck (4 OK = todo bien)
+  2. diag       # si algo falla, diagnóstico completo
+  3. logs frontend 30
+  4. logs backend 30
+
+Si todo OK, arrancar a trabajar.
+Si algo falla, atacar antes de empezar.
+
+________________________________________
+7. DIAGNÓSTICO DE PROBLEMAS
+________________________________________
+
+🔍 502 BAD GATEWAY
+
+Síntoma: nginx responde 502.
+Causa probable: El frontend o el backend no están corriendo.
+
+Diagnóstico:
+  hc
+  diag
+  logs frontend 50
+  logs backend 50
+  ss -tlnp | grep -E "3000|3001"
+
+Fix:
+  rf                     # si es frontend
+  rb                     # si es backend
+  /opt/facilito/rebuild.sh          # si es frontend roto
+  /opt/facilito/rebuild-backend.sh  # si es backend roto
+
+________________________________________
+🔍 CHUNKLOADERROR (navegador)
+
+Síntoma: La página carga pero da errores de chunks.
+Causa probable: El navegador tiene HTML viejo cacheado.
+
+Fix:
+  - F12 abierto → clic derecho en el botón de recargar →
+    "Vaciar caché y recargar"
+  - O abrir en incógnito (Ctrl+Shift+N)
+  - Si persiste: /opt/facilito/rebuild.sh
+
+________________________________________
+🔍 IMÁGENES 404 (/api/api/...)
+
+Síntoma: Las imágenes no cargan y la consola muestra /api/api/....
+Causa probable: Doble /api/ en URLs.
+
+Diagnóstico:
+  fixapi
+
+El script hace diagnóstico + fix + verificación en un paso.
+
+Manualmente:
+  docker exec -i facilito_postgres psql -U facilito_admin -d facilito_db -c "
+  SELECT slug,
+         CASE WHEN logo_url   LIKE '%/api/api/%' THEN 'SÍ' ELSE 'no' END AS logo_dup,
+         CASE WHEN banner_url LIKE '%/api/api/%' THEN 'SÍ' ELSE 'no' END AS banner_dup
+  FROM tenants WHERE logo_url LIKE '%/api/api/%' OR banner_url LIKE '%/api/api/%';"
+
+  docker exec -i facilito_postgres psql -U facilito_admin -d facilito_db -c "
+  UPDATE tenants SET logo_url = REPLACE(logo_url, '/api/api/', '/api/')
+    WHERE logo_url LIKE '%/api/api/%';
+  UPDATE tenants SET banner_url = REPLACE(banner_url, '/api/api/', '/api/')
+    WHERE banner_url LIKE '%/api/api/%';"
+
+________________________________________
+🔍 BUILD FALLA (frontend)
+
+Síntoma: /opt/facilito/rebuild.sh falla.
+
+Diagnóstico:
+  cat /tmp/rebuild.log | tail -50
+
+Causas comunes:
+  - Error de next/font → ver "DNS de Google falla"
+  - Error de TypeScript → ignorado por next.config.ts
+  - Falta de memoria → free -h, reiniciar el servidor
+
+________________________________________
+🔍 BUILD FALLA (backend)
+
+Síntoma: /opt/facilito/rebuild-backend.sh falla.
+
+Diagnóstico:
+  cat /tmp/rebuild-backend.log | tail -50
+
+Causas comunes:
+  - Error de TypeScript NO ignorado (Nest sí valida tipos)
+  - Falta de dependencias → cd apps/backend && pnpm install
+  - Falta de memoria → free -h
+
+________________________________________
+🔍 SERVICIO NO ARRANCA (frontend)
+
+Diagnóstico:
+  journalctl -u facilito-frontend.service -n 30 --no-pager
+  tail -50 /var/log/facilito-frontend.error.log
+
+Verificar artefacto:
+  cd /opt/facilito/apps/frontend
+  ls -la .next/BUILD_ID
+  # Si NO existe → rebuild
+  /opt/facilito/rebuild.sh
+
+________________________________________
+🔍 SERVICIO NO ARRANCA (backend)
+
+Diagnóstico:
+  journalctl -u facilito-backend.service -n 30 --no-pager
+
+Verificar artefacto:
+  cd /opt/facilito/apps/backend
+  ls -la dist/main.js
+  # Si NO existe → rebuild
+  /opt/facilito/rebuild-backend.sh
+
+________________________________________
+🔍 LOGIN DA 500
+
+Causa más probable: JWT_SECRET no está definido en .env.
+
+Fix: verificar que .env tenga JWT_SECRET=... (96 hex).
+
+________________________________________
+🔍 LOGIN DA 401 Y EL PASSWORD ES CORRECTO
+
+Causa: Cuenta bloqueada por intentos fallidos.
+
+Fix:
+  unlock usuario@example.com
+
+El script muestra el estado actual, resetea, y verifica.
+
+________________________________________
+🔍 2FA NO ACEPTA EL CÓDIGO
+
+Causa 1: La hora del server está desincronizada.
+
+Fix:
+  timedatectl set-ntp true
+  systemctl restart systemd-timesyncd
+
+Causa 2: El totpSecret no se desencripta (ENCRYPTION_KEY cambió).
+
+Fix:
+  no2fa usuario@example.com
+
+________________________________________
+🔍 LOGOUT NO REVOCA EL REFRESH TOKEN
+
+Causa: El código usa localStorage.clear() en vez de
+performLogout().
+
+Fix: Usar performLogout de lib/auth/logout.ts.
+
+________________________________________
+🔍 EMAIL NO SE ENVÍA
+
+Causa: RESEND_API_KEY vacío → modo dev.
+
+Comportamiento: El link se loguea a la consola del backend.
+
+Fix: Para producción, configurar Resend y setear RESEND_API_KEY.
+
+________________________________________
+🔍 PUERTO 3001 (o 3000) OCUPADO POR ZOMBIE
+
+Diagnóstico:
+  ss -tlnp | grep 3001
+  pgrep -af "next-server"
+
+Fix:
+  rf                     # frontend
+  rb                     # backend
+
+________________________________________
+🔍 DNS DE GOOGLE FALLA (fonts.googleapis.com)
+
+Síntoma: El build falla con error de next/font.
+
+Diagnóstico:
+  curl -I https://fonts.googleapis.com 2>&1 | head -3
+  nslookup fonts.googleapis.com 2>&1 | head -5
+
+Fix temporal: Esperar a que haya internet o cambiar el DNS.
+Fix definitivo: Descargar la fuente Quicksand y usar
+next/font/local.
+
+________________________________________
+🔍 ROLES NO COMPRADORES VEN BOTONES DE COMPRADOR
+
+Síntoma: Un repartidor o profesional logueado ve "Favoritos"
+o "Mi Cuenta" en el header.
+
+Causa: El componente no filtra por rol.
+
+Diagnóstico:
+  grep -n "FavoritesDropdown\|getAccountPath" \
+    /opt/facilito/apps/frontend/components/Header.tsx
+
+Fix:
+  - Importar isBuyer de @/lib/roles.
+  - Envolver los botones en {isBuyer(user) && (...)}.
+
+Archivos afectados:
+  - components/Header.tsx (Favoritos, Mi Cuenta desktop y mobile)
+  - components/FinalCtaSection.tsx (CTA de crear tienda)
+
+________________________________________
+🔍 DESPUÉS DE LOGOUT, LA VISTA NO VUELVE AL ESTADO PÚBLICO
+
+Síntoma: Al hacer click en "Cerrar Sesión" estando en /, la
+página no reacciona y sigue mostrando "Hola, [nombre]".
+
+Causa: El evento authChange no se disparaba correctamente. El
+logout disparaba authChanged (con "d") pero los componentes
+escuchaban authChange (sin "d").
+
+Fix:
+  - Disparar authChange (sin "d") en performLogout.
+  - Si window.location.pathname === redirectTo, forzar
+    window.location.reload().
+
+________________________________________
+8. REFERENCIA TÉCNICA
+________________________________________
+
+🌐 PUERTOS
+
+| Puerto | Servicio         | Acceso          |
+|--------|------------------|-----------------|
+| 80     | nginx HTTP       | Redirige a 443  |
+| 443    | nginx HTTPS      | Público         |
+| 3000   | Backend NestJS   | Solo localhost  |
+| 3001   | Frontend Next.js | Solo localhost  |
+| 5432   | Postgres         | Solo Docker     |
+
+📁 ARCHIVOS CLAVE
+
+| Archivo                                                          | Propósito                          |
+|------------------------------------------------------------------|------------------------------------|
+| /etc/nginx/sites-available/facilito                              | Config nginx                       |
+| /etc/nginx/certs/facilito.pem                                    | Cert SSL                           |
+| /opt/facilito/apps/frontend/.env.local                           | Env frontend                       |
+| /opt/facilito/apps/backend/.env                                  | Env backend (incluye auth)         |
+| /opt/facilito/apps/frontend/next.config.ts                       | Config Next                        |
+| /opt/facilito/apps/frontend/package.json                         | Scripts npm                        |
+| /opt/facilito/apps/backend/src/modules/auth/auth.service.ts      | Lógica principal auth              |
+| /opt/facilito/apps/backend/src/modules/auth/token.service.ts     | Firma/validación JWT               |
+| /opt/facilito/apps/backend/src/modules/auth/refresh-token.service.ts | Rotación                     |
+| /opt/facilito/apps/backend/src/modules/auth/two-factor.service.ts | TOTP                              |
+| /opt/facilito/apps/frontend/lib/api.ts                           | apiFetch con interceptor           |
+| /opt/facilito/apps/frontend/lib/auth/logout.ts                   | performLogout unificado            |
+| /opt/facilito/apps/frontend/lib/roles.ts                         | Helpers de roles                   |
+| /etc/systemd/system/facilito-frontend.service                    | Servicio systemd frontend          |
+| /etc/systemd/system/facilito-frontend.service.d/override.conf    | Override systemd                   |
+| /etc/systemd/system/facilito-backend.service                     | Servicio systemd backend           |
+
+🔧 COMANDOS DE DIAGNÓSTICO
+
+Con los scripts nuevos (recomendado):
+  hc                     # healthcheck rápido
+  diag                   # diagnóstico completo
+  logs frontend 30
+  logs backend 30
+
+Manualmente:
+  systemctl status facilito-frontend.service --no-pager | head -6
+  systemctl status facilito-backend.service --no-pager | head -6
+  systemctl status nginx --no-pager | head -6
+  ss -tlnp | grep -E "3000|3001"
+  nginx -t
+  curl -kI https://<IP_ACTUAL>/
+  curl -I http://localhost:3000/
+  curl -I http://localhost:3001/
+  docker exec -i facilito_postgres psql -U facilito_admin -d facilito_db -c "SELECT 1;"
+  tail -50 /var/log/facilito-frontend.error.log
+  journalctl -u facilito-frontend.service -n 30 --no-pager
+  journalctl -u facilito-backend.service -n 30 --no-pager
+
+🔧 CONFIGURACIÓN SYSTEMD
+
+/etc/systemd/system/facilito-frontend.service:
+  [Unit]
+  Description=Facilito Frontend (Next.js)
+  After=network.target facilito-backend.service
+  Wants=facilito-backend.service
+
+  [Service]
+  Type=simple
+  User=root
+  WorkingDirectory=/opt/facilito/apps/frontend
+  Environment=NODE_ENV=production
+  Environment=PORT=3001
+  EnvironmentFile=/opt/facilito/apps/frontend/.env.local
+  ExecStart=/usr/bin/pnpm start --port 3001 --hostname 0.0.0.0
+  Restart=always
+  RestartSec=5
+  StandardOutput=append:/var/log/facilito-frontend.log
+  StandardError=append:/var/log/facilito-frontend.error.log
+
+  [Install]
+  WantedBy=multi-user.target
+
+/etc/systemd/system/facilito-frontend.service.d/override.conf:
+  [Service]
+  Environment="NODE_EXTRA_CA_CERTS=/root/.local/share/mkcert/rootCA.pem"
+  KillMode=control-group
+  KillSignal=SIGTERM
+  TimeoutStopSec=15
+
+🔧 CONFIGURACIÓN NGINX
+
+/etc/nginx/sites-available/facilito:
+  server {
+      listen 80;
+      server_name _;
+      return 301 https://$host$request_uri;
+  }
+
+  server {
+      listen 443 ssl;
+      http2 on;
+      server_name _;
+
+      ssl_certificate     /etc/nginx/certs/facilito.pem;
+      ssl_certificate_key /etc/nginx/certs/facilito-key.pem;
+
+      ssl_protocols TLSv1.2 TLSv1.3;
+      ssl_ciphers HIGH:!aNULL:!MD5;
+      ssl_prefer_server_ciphers on;
+
+      client_max_body_size 20M;
+
+      location /api/ {
+          proxy_pass http://127.0.0.1:3000/;
+          # ... resto de headers
+      }
+
+      location /socket.io/ {
+          proxy_pass http://127.0.0.1:3000;
+          # ...
+      }
+
+      location /uploads/ {
+          proxy_pass http://127.0.0.1:3000;
+          # ...
+      }
+
+      location / {
+          proxy_pass http://127.0.0.1:3001;
+          # ...
+      }
+  }
+
+________________________________________
+9. REGLAS DE ORO
+________________________________________
+
+✅ HACER
+
+- Antes de rm -rf .next (o dist/), parar el servicio.
+- Después de tocar código frontend, siempre rebuild.sh.
+- Después de tocar código backend, siempre rebuild-backend.sh.
+- Si movés el servidor, siempre cambiar-ip.sh <NUEVA_IP>.
+- Antes de demos importantes, bkfull o bkdb.
+- Recargá con Ctrl+Shift+R después de un rebuild del frontend.
+- Usá apiFetch en todo request autenticado del frontend.
+- Usá performLogout() en todo logout.
+- Registrá toda acción sensible en auth_events.
+- Devolvé siempre 401 en errores de auth.
+- Usá toPublicUser() para no filtrar campos sensibles.
+- Rotá JWT_SECRET con doble validación (_NEW + _OLD, 15 min).
+- Usá isBuyer(), isDriver(), isProfessional() de lib/roles.ts.
+- El nombre del evento de logout es authChange (SIN "d").
+- Todo CTA de "crear tienda" condicionado a isBuyer(user) || !user.
+- Si agregás un nuevo rol, actualizá lib/roles.ts.
+- Antes de crear un archivo nuevo, grep. Si ya existe, reusar.
+- Cero emojis en la UI. SVG heredados. Colores del tenant.
+- Un cambio, un rebuild, una verificación.
+- Diagnóstico primero. Búsqueda exacta + reemplazo.
+
+❌ NO HACER
+
+- NO uses Turbopack. package.json tiene --webpack.
+- NO toques sin razón:
+    /etc/nginx/sites-available/facilito
+    /opt/facilito/apps/frontend/next.config.ts
+    /opt/facilito/apps/frontend/.env.local
+    /opt/facilito/apps/frontend/package.json
+    /etc/systemd/system/facilito-frontend.service*
+    /opt/facilito/apps/backend/.env
+- NO toques la DB. Las URLs son relativas.
+- NO borres .turbo. No hace falta con Webpack.
+- NO hagas rm -rf .next (o dist/) con el servicio corriendo.
+- NO cambies la IP manualmente en archivos. Usá cambiar-ip.sh.
+- NO uses jwt.decode() en controllers. Usá req.user.
+- NO uses fetch directo en el frontend autenticado. Usá apiFetch.
+- NO uses localStorage.clear() para logout. Usá performLogout().
+- NO loguees tokens, passwords, ni secrets.
+- NO rotes JWT_SECRET sin doble validación.
+- NO devuelvas campos sensibles al frontend.
+- NO muestres botones de comprador a roles no compradores.
+- NO dupliques la lógica de roles. Usá lib/roles.ts.
+- NO rompas la estética. Si un cambio de performance afecta
+  la estética, preguntar antes.
+
+________________________________________
+10. CHEAT SHEET
+________________________________________
+
+╔═══════════════════════════════════════════════════════════════════╗
+║                       FACILITO - COMANDOS RÁPIDOS                 ║
+╠═══════════════════════════════════════════════════════════════════╣
+║                                                                   ║
+║  🩺 DIAGNÓSTICO                                                   ║
+║     hc              # healthcheck rápido                          ║
+║     diag            # diagnóstico completo                        ║
+║     logs frontend   # logs del frontend                           ║
+║     logs backend    # logs del backend                            ║
+║                                                                   ║
+║  🔄 REBUILD                                                       ║
+║     /opt/facilito/rebuild.sh              # frontend              ║
+║     /opt/facilito/rebuild-backend.sh      # backend               ║
+║                                                                   ║
+║  🔴 RESTART (sin rebuild)                                         ║
+║     rf              # restart frontend + healthcheck              ║
+║     rb              # restart backend + healthcheck               ║
+║                                                                   ║
+║  🌐 CAMBIAR DE IP                                                 ║
+║     1. hostname -I                                                ║
+║     2. /opt/facilito/cambiar-ip.sh <NUEVA_IP>                     ║
+║     3. https://<NUEVA_IP>/                                        ║
+║                                                                   ║
+║  💾 BACKUP                                                        ║
+║     bkdb            # backup solo de la DB                        ║
+║     bkfull          # backup completo (DB + apps + nginx)         ║
+║                                                                   ║
+║  🗄️  BASE DE DATOS                                                ║
+║     db              # abrir psql interactivo                      ║
+║     q "SELECT ..."  # ejecutar query                              ║
+║                                                                   ║
+║  🔐 AUTH - FIX                                                    ║
+║     unlock <email>  # desbloquear usuario                         ║
+║     no2fa <email>   # desactivar 2FA                              ║
+║                                                                   ║
+║  🛠️  FIX                                                          ║
+║     fixapi          # corregir /api/api/ en tenants               ║
+║                                                                   ║
+║  📁 ARCHIVOS                                                      ║
+║     ls -la /opt/facilito/scripts/                                 ║
+║     cat /opt/facilito/scripts/diagnose.sh                         ║
+║                                                                   ║
+║  📘 MANUAL                                                        ║
+║     cat "/opt/facilito/Manual facilito v4.0.txt"                  ║
+║                                                                   ║
+╚═══════════════════════════════════════════════════════════════════╝
+
+________________________________________
+11. REDISEÑO UCP — FULFILLMENT Y COBRO A DESTINO
+________________________________________
+
+📅 Fecha de implementación: 10/10/2026
+🎯 Objetivo: normalizar el modelo de entrega al estándar UCP
+📊 Fases: 7 (backend, frontend, DB, migración)
+
+📌 VALORES CANÓNICOS DE FULFILLMENT
+
+| Valor    | Significado                     | Cuándo se usa                          |
+|----------|---------------------------------|----------------------------------------|
+| pickup   | Retiro en tienda                | El comprador retira                    |
+| shipping | Encomienda (MRW, Zoom, etc.)    | El comprador paga al recibir o adelantado |
+| delivery | Delivery local (facilito)       | Legacy + delivery propio               |
+
+⚠️ delivery es legacy. El estándar UCP solo reconoce pickup y shipping.
+
+📦 ESTRUCTURA DE paymentMetadata
+
+{
+  "fulfillment": "pickup" | "shipping" | "delivery",
+  "delivery": {                     // solo si fulfillment === 'shipping'
+    "company": "mrw",
+    "companyName": "MRW",
+    "costUsd": 12 | null,           // null = cobro a destino
+    "costVes": 2400 | null,
+    "selected": true,
+    "estimatedDays": "2-3 días hábiles",
+    "trackingNumber": null,
+    "address": "...",
+    "payOnDelivery": false          // ← NUEVO
+  },
+  "localDelivery": {                // solo si fulfillment === 'delivery'
+    "fee": 2,
+    "distanceKm": 1.5,
+    "etaMinutes": 15
+  }
+}
+
+🎯 REGLA DE COHERENCIA
+
+- pickup → NO puede tener delivery.company (BadRequestException).
+- shipping → SÍ debe tener delivery.company.
+- delivery → SÍ debe tener localDelivery.
+
+💰 COBRO A DESTINO
+
+Cuando el admin activa "Cobro a destino" para una empresa en
+DeliverySettings:
+  - costsUSD[company] = null.
+  - paymentMetadata.delivery.costUsd = null.
+  - NO se suma al totalAmount (el comprador paga al recibir).
+  - Los modales muestran badge "Cobro a destino" en ámbar.
+
+📊 ESTADO DE LA DB POST-MIGRACIÓN
+
+  docker exec -i facilito_postgres psql -U facilito_admin -d facilito_db -c "
+  SELECT
+    \"paymentMetadata\"->>'fulfillment' AS fulfillment,
+    CASE WHEN \"paymentMetadata\"->'delivery'->>'company' IS NOT NULL
+         THEN 'con_company' ELSE 'sin_company' END AS delivery_state,
+    COUNT(*)
+  FROM orders
+  GROUP BY 1, 2
+  ORDER BY 1, 2;"
+
+Distribución esperada (post-migración):
+  fulfillment | delivery_state | count
+  ------------+----------------+-------
+  delivery    | sin_company    |     4
+  pickup      | sin_company    |    16
+  shipping    | con_company    |     6+
+
+🚨 REGLAS DE NEGOCIO
+
+1. Un repartidor NO puede comprar. El backend valida
+   role !== 'repartidor' al crear orden.
+2. Un profesional NO puede comprar.
+3. El kiosco es autoservicio presencial → NO permite encomienda.
+   Solo pickup + delivery local.
+4. El fulfillment es la fuente de verdad. Se calcula en create()
+   y en updateDelivery().
+5. costUsd: null = cobro a destino (no es error, no se suma al total).
+6. El updateDelivery fuerza fulfillment='shipping' al agregar
+   delivery.company.
+7. tenantId es obligatorio al crear orden (400 si falta).
+
+📁 ARCHIVOS MODIFICADOS (resumen)
+
+Backend:
+  - apps/backend/src/modules/orders/orders.service.ts
+      create(): calcula effectiveFulfillment.
+      updateDelivery(): fuerza shipping + audita en auth_events
+        si es COMPLETED.
+      updateLocalDelivery(): audit.
+      resolveDeliveryCost(): respeta null.
+  - apps/backend/src/modules/orders/dto/create-order.dto.ts
+      @IsIn(['delivery', 'pickup', 'shipping'])
+
+Frontend:
+  - apps/frontend/app/tienda/[slug]/components/CartSidebar/CartPaymentStep.tsx
+      Selector unificado pickup/local/shipping.
+      onDeliveryMethodChange propaga la elección.
+      Muestra "Cobro a destino" cuando costsUSD[id] === null.
+  - apps/frontend/app/tienda/[slug]/components/CartSidebar/index.tsx
+      deliveryMethodChoice state.
+      payloadData.fulfillment según elección.
+  - apps/frontend/app/tienda/[slug]/components/CartSidebar/CartConfirmModal.tsx
+      Badge "Cobro a destino".
+  - apps/frontend/app/tienda/[slug]/components/CartSidebar/OrderSuccessModal.tsx
+      Badge "Cobro a destino" (3 casos: pickup, delivery, shipping).
+  - apps/frontend/app/mi-cuenta/components/orders/BuyerOrderDetailModal.tsx
+      Badge "Cobro a destino".
+  - apps/frontend/app/admin/[slug]/components/orders/components/OrderDetailModal.tsx
+      Badge "Cobro a destino".
+  - apps/frontend/app/admin/[slug]/components/settings/subcomponents/DeliverySettings.tsx
+      Checkbox "Cobro a destino" por empresa.
+      costsUSD es Record<string, number | null>.
+
+DB:
+  - Migración SQL de órdenes viejas (3 en total):
+    UPDATE orders
+    SET "paymentMetadata" = jsonb_set("paymentMetadata", '{fulfillment}', '"shipping"')
+    WHERE "paymentMetadata"->>'fulfillment' = 'pickup'
+      AND "paymentMetadata"->'delivery'->>'company' IS NOT NULL;
+
+🔧 DEUDA TÉCNICA ANOTADA
+
+orderType mezcla dos conceptos (tipo de orden + modo de entrega).
+El default es 'delivery' (legacy).
+Propuesta futura: cambiar default a 'product'. Requiere auditar
+2 archivos del frontend.
+Impacto: 4 órdenes viejas con orderType='delivery'.
+
+________________________________________
+12. ROLES Y VISIBILIDAD EN LA UI
+________________________________________
+
+📅 Fecha de implementación: 10/10/2026
+🎯 Objetivo: cada rol solo ve las acciones que le corresponden
+
+👥 ROLES DEL SISTEMA
+
+| Rol                  | Compra | Tiene tienda | Ve Favoritos | Ve "Mi Cuenta" | Ve "Panel"         |
+|----------------------|--------|--------------|--------------|----------------|--------------------|
+| buyer / comprador    | ✅     | Opcional     | ✅           | ✅             | Solo si tiene tienda |
+| seller / vendedor    | ❌     | ✅           | ❌           | ❌             | ✅                 |
+| admin / owner        | ❌     | ✅           | ❌           | ❌             | ✅                 |
+| repartidor           | ❌     | ❌           | ❌           | ❌             | ❌                 |
+| profesional          | ❌     | ❌           | ❌           | ❌             | ❌                 |
+| Anónimo              | ✅     | N/A          | ❌           | ❌             | ❌                 |
+
+🛠️ HELPER CENTRAL: lib/roles.ts
+
+  export function isDriver(user: any): boolean {
+    if (!user) return false;
+    const role = (user.role || user.activeRole || '').toLowerCase();
+    return role === 'repartidor';
+  }
+
+  export function isBuyer(user: any): boolean {
+    if (!user) return false;
+    const role = (user.role || user.activeRole || '').toLowerCase();
+    return role === 'buyer' || role === 'comprador';
+  }
+
+  export function isSeller(user: any): boolean {
+    if (!user) return false;
+    const role = (user.role || user.activeRole || '').toLowerCase();
+    return role === 'seller' || role === 'vendedor' ||
+           role === 'admin' || role === 'owner';
+  }
+
+  export function isProfessional(user: any): boolean {
+    if (!user) return false;
+    const role = (user.role || user.activeRole || '').toLowerCase();
+    return role === 'profesional' || role === 'professional';
+  }
+
+🌐 Header.tsx — VISIBILIDAD POR ROL
+
+  {/* Favoritos: SOLO para compradores */}
+  {user.id && isClient && isBuyer(user) && (
+    <FavoritesDropdown userId={user.id} ... />
+  )}
+
+  {/* Mi Cuenta: SOLO para compradores */}
+  {isBuyer(user) && (
+    <button onClick={() => router.push(getAccountPath(user))}>
+      Mi Cuenta
+    </button>
+  )}
+
+  {/* Mi Tienda y Panel: solo si tiene tenant */}
+  {hasTenant && tenant && (
+    <>
+      <Link href={`/tienda/${tenant.slug}`}>Ver Mi Tienda</Link>
+      <button onClick={() => router.push(`/admin/${tenant.slug}`)}>Panel</button>
+    </>
+  )}
+
+⚠️ Mi Tienda y Panel NO están condicionados a isBuyer porque un
+seller también debe poder entrar a su panel.
+
+📣 FinalCtaSection.tsx — "Crea tu tienda"
+
+  const showCta =
+    !isLoading &&
+    (!currentUser || (isBuyer(currentUser) && !userHasStore));
+
+  - Anónimo → muestra CTA.
+  - Comprador sin tienda → muestra CTA.
+  - Comprador con tienda → NO muestra.
+  - Repartidor / Profesional → NO muestra.
+  - Seller / Admin → NO muestra (ya tiene tienda).
+
+🔄 LOGOUT UNIFICADO
+
+lib/auth/logout.ts:
+
+  // 1. Notifica al backend (fire-and-forget)
+  // 2. Limpia storage (user, token, access_token, refresh_token,
+  //    tenant, userName)
+  // 3. Dispara eventos globales: authChange, authChanged, userChange
+  // 4. Redirige con recarga completa:
+  if (window.location.pathname === redirectTo) {
+    window.location.reload();
+  } else {
+    window.location.href = redirectTo;
+  }
+
+⚠️ El evento principal es authChange (SIN "d").
+
+________________________________________
+13. OPTIMIZACIONES DE PERFORMANCE (SESIÓN 2026-10-13)
+________________________________________
+
+📅 Fecha: 13/10/2026
+🎯 Objetivo: mejorar fluidez de scroll y toggle del sidebar en
+   Admin, Mi Cuenta y Home, sin romper estética.
+
+🔬 METODOLOGÍA
+
+Se midió con Chrome DevTools → Performance, CPU 4x slowdown,
+grabando scroll de 4s. Categorías observadas:
+  - System (compositing, GC, trabajo del browser)
+  - Rendering (Recalculate Style, Layout)
+  - Painting
+  - Scripting (JS, React)
+
+Se priorizó atacar Rendering + Painting + System, que dominaban.
+Scripting estaba bajo (< 350 ms), así que React no era el cuello
+de botella principal.
+
+🏠 HOME
+
+1. Header sticky: se quitó backdrop-blur-md del wrapper sticky.
+   Ahora usa color-mix(in srgb, var(--bg-color) 85%, transparent).
+   El header hereda el color del fondo del sitio, sin blur GPU.
+   Archivo: components/Header.tsx:373
+
+2. Fondo del hero: se quitó transition-all duration-700 del
+   círculo blur-[160px]. Sin transición, no se repinta.
+   Archivo: app/page.tsx:524
+
+3. Grids de AvailableStoresSection y AvailableProductsSection:
+   se quitó transition-all duration-300. No había nada que
+   transicionar.
+   Archivos: components/AvailableStoresSection.tsx:420
+             components/AvailableProductsSection.tsx:617
+
+4. ProductCard: transition-all → transition-transform. El único
+   cambio real era el translateY del hover.
+   Archivo: components/AvailableProductsSection.tsx:137
+
+5. Botones "Ver más" / "Ver todas" (6 en total):
+   transition-all → transition-transform.
+   Archivos: components/AvailableStoresSection.tsx:462,479,494
+             components/AvailableProductsSection.tsx:672,694,706
+
+6. TestimonialCarousel: se simplificó la animación de la imagen.
+   Antes: opacity + scale + x + duration 0.5.
+   Ahora: opacity + y + duration 0.4.
+   El drop-shadow bajó de 25px/35px a 15px/25px.
+   Archivo: app/page.tsx:~101
+
+7. TestimonialCarousel: la tarjeta de texto perdió
+   backdrop-blur-xl y shadow-2xl (el boxShadow inline ya
+   provee la sombra visible).
+   Archivo: app/page.tsx:~120
+
+8. StatusFilter, NichesList, inputs de búsqueda:
+   transition-all → transition-colors.
+   Archivos: components/AvailableStoresSection.tsx:132,172,368
+             components/AvailableProductsSection.tsx:328
+
+🏢 ADMIN
+
+1. AdminSidebar: transition: 'all 0.15s ease' → transition:
+   'width 0.2s cubic-bezier(0.22, 1, 0.36, 1)'.
+   Archivo: app/admin/[slug]/components/AdminSidebar.tsx:922
+
+2. admin-container: se quitó transition-colors duration-300
+   (el color del contenedor no cambia, era puro costo).
+   Archivo: app/admin/[slug]/page.tsx:926
+
+3. Fondo decorativo del admin: se quitó transition-all
+   duration-700 del círculo blur-[140px].
+   Archivo: app/admin/[slug]/page.tsx:957
+
+4. Doble overflow-y-auto anidado: se eliminó del <main>.
+   Quedó solo en el div interno (con scroll vertical).
+   Archivo: app/admin/[slug]/page.tsx:952 y :963
+
+5. min-w-0 / min-h-0: el <main> tiene min-h-0 min-w-0.
+   El div interno NO tiene min-w-0. Esto evita que el árbol
+   flex colapse horizontalmente y rompe el scroll horizontal
+   de la tabla de inventario.
+   Archivo: app/admin/[slug]/page.tsx:952 y :963
+
+6. Tablas de inventario: se quitó transition-all duration-300
+   del contenedor de tabla (border rounded-3xl shadow-xl
+   p-5 space-y-4).
+   Archivos: components/catalog/inventory/ItemInventoryTable.tsx:616
+             components/catalog/inventory/ServiceInventoryTable.tsx:839
+
+7. Tablas de inventario: se quitó transition-colors de los <tr>.
+   Archivos: ItemInventoryTable.tsx:841
+             ServiceInventoryTable.tsx:180
+
+8. Tablas de inventario: se quitó crossOrigin="anonymous" de
+   las imágenes de la tabla.
+   Archivos: ItemInventoryTable.tsx:856
+             ServiceInventoryTable.tsx:203
+
+📊 MEDICIONES (referencia)
+
+Home antes:  Rendering 765 / Painting 705 / System 634 / Scripting 333
+Home después: (mejoró perceptiblemente, sin medición exacta final)
+
+Catálogo antes:  Rendering 318 / Painting 309 / System 324 / Scripting 104
+
+👤 MI CUENTA
+
+1. .mi-cuenta-content: isolation: isolate + will-change:
+   scroll-position. Aísla el scroll container en su propia capa.
+   Archivo: app/mi-cuenta/page.tsx:720
+
+2. Branding y Órdenes: 5 contenedores grandes con
+   backdrop-blur-md → backdrop-blur-sm. El efecto visual es
+   casi idéntico, el costo GPU baja mucho.
+   Archivos: AccountBrandingVisual.tsx:787,994
+             BrandingInfoColumn.tsx:425,899
+             OrdersTable.tsx:88
+
+🐛 BUGS ARREGLADOS EN ESTA SESIÓN
+
+1. ServiceCatalog no heredaba el color del tema.
+   Causa: en app/tienda/[slug]/page.tsx, <ServiceCatalog> no
+   recibía secondary={store.secondary}.
+   Fix: agregar secondary={store.secondary} en la línea 804.
+   Archivo: app/tienda/[slug]/page.tsx:804
+
+2. Scroll horizontal de la tabla de inventario roto.
+   Causa: el min-h-0 del <main> (Fase 3 del rediseño) +
+   min-w-0 en el div interno colapsaban el ancho a ~20px.
+   Fix: mover min-w-0 al <main> y quitarlo del div interno.
+   Archivo: app/admin/[slug]/page.tsx:952 y :963
+
+🎨 SIDEBAR COLAPSADO CON LABELS CORTOS
+
+El AdminSidebar colapsado (80px) ahora muestra el ícono arriba
+y un shortLabel abajo. Al hover, el tooltip muestra el label
+completo.
+
+- Cada item del array menuItems tiene shortLabel (si difiere
+  del label).
+- MenuItem: si isCollapsedMode, flex-col, gap-0.5, px-0.5, py-2.
+- El <span> del label: text-[10px], truncate, w-full, text-center.
+- El <aside>: p-2 cuando isCollapsedMode, p-5 si no.
+
+Abreviaturas actuales:
+  Panel, Catálogo/Servicios, Órdenes/Citas, Envíos/Horarios,
+  Equipo, Reseñas, Avisos, Mensajes, Marca, Perfil, Ajustes.
+
+Archivos: app/admin/[slug]/components/AdminSidebar.tsx
+  - Array menuItems: ~línea 245
+  - MenuItem: ~línea 150-215
+  - <aside>: ~línea 892
+
+📋 PENDIENTE (BACKLOG DE PERFORMANCE)
+
+- Replicar labels cortos en AccountSidebar (mi-cuenta).
+- Aura del TestimonialCarousel: solo se re-anima al cambiar
+  paleta, impacto bajo. Dejar como está.
+- Otras secciones de la home (AvailableServiceSection,
+  AvailableServicesItemsSection, ValuePropositionSection,
+  FinalCtaSection, LocationBanner): revisar transition-all
+  residuales.
+- AccountBrandingVisual.tsx y BrandingInfoColumn.tsx:
+  transition-all residuales en los mismos contenedores que ya
+  tienen backdrop-blur-sm.
+- Mi Cuenta: props de tabs sin memoizar (sensación general,
+  no scroll).
+- Imagen PNG de 301 kB que apareció en Network: optimizar.
+
+📁 BACKUPS CREADOS EN ESTA SESIÓN
+
+Cada archivo modificado tiene su backup en el mismo directorio,
+con sufijo .bak-<nombre-fase>:
+  - AdminSidebar.tsx.bak-fase1
+  - page.tsx.bak-tanda1 (admin)
+  - AvailableStoresSection.tsx.bak-tanda1
+  - AvailableProductsSection.tsx.bak-tanda1
+  - ItemInventoryTable.tsx.bak-tanda1
+  - ServiceInventoryTable.tsx.bak-tanda1
+  - page.tsx.bak-tanda2 (home)
+  - Header.tsx.bak-faseH1 / .bak-faseH1b
+  - AccountBrandingVisual.tsx.bak-tanda2
+  - BrandingInfoColumn.tsx.bak-tanda2
+  - OrdersTable.tsx.bak-tanda2
+  - page.tsx.bak-fix-scroll-h (admin)
+  - page.tsx.bak-fix-scroll-h2 (admin)
+
+Los backups se dejan hasta que todo esté confirmado funcionando
+en producción durante un tiempo.
+
+________________________________________
+14. WARNINGS CONOCIDOS Y DEUDA TÉCNICA
+________________________________________
+
+⚠️ WARNING: "No se pudo parsear NEXT_PUBLIC_API_URL: /api"
+
+Repetido ~104 veces en /var/log/facilito-frontend.error.log.
+
+Causa: algo en el código intenta new URL(process.env.NEXT_PUBLIC_API_URL)
+con un valor relativo (/api). new URL() no acepta rutas relativas
+sin base. Falla silenciosamente y cae a un fallback.
+
+Impacto: no rompe nada funcionalmente, pero llena los logs y
+puede causar bugs sutiles en algún lugar.
+
+Estado: PENDIENTE. Buscar el origen (grep por
+"new URL" en el frontend) y arreglar.
+
+⚠️ WARNING HISTÓRICO: "Could not find a production build in
+the '.next' directory"
+
+Aparece en el log de errores del frontend. Corresponde a algún
+rebuild anterior donde el servicio arrancó antes de que el build
+terminara. No es un problema actual.
+
+Estado: ruido histórico. Ignorar.
+
+⚠️ SIGKILL DEL BACKEND EN REBUILD
+
+En ocasiones systemd mata el proceso viejo del backend con
+SIGKILL después de 15s de no responder a SIGTERM. Es esperable
+cuando el proceso está ocupado.
+
+Estado: no es un problema. No hacer nada.
+
+📋 DEUDA TÉCNICA PENDIENTE
+
+1. orderType mezcla dos conceptos (tipo de orden + modo de
+   entrega). Default: 'delivery' (legacy).
+   Propuesta: cambiar default a 'product'.
+   Requiere auditar 2 archivos del frontend.
+   Impacto: 4 órdenes viejas con orderType='delivery'.
+
+2. Props de tabs en mi-cuenta sin memoizar. No afecta scroll,
+   pero suma a la sensación general.
+   Archivo: app/mi-cuenta/page.tsx
+
+3. Imagen PNG de 301 kB que apareció en Network. Optimizar
+   (comprimir, WebP, o revisar dónde se usa).
+
+4. next/font/local: hoy se usa next/font/google con Quicksand.
+   Si falla el DNS, el build falla. Propuesta: descargar la
+   fuente y usar next/font/local.
+
+5. Tests automatizados: no existen. Todo es manual.
+   Propuesta: agregar tests mínimos de auth y órdenes.
+
+6. ✅ RESUELTO (2026-10-16): Warnings "priceColors is not
+   defined" y "primary is not defined".
+   Causa: subcomponentes memoizados en ProductDetailModal.tsx
+   y CartConfirmModal.tsx usaban variables del padre sin
+   recibirlas como props.
+   Fix: pasar las props faltantes (priceColors, primary) desde
+   el padre y agregarlas al destructuring de los subcomponentes.
+   Impacto: eran bugs preexistentes que estaban silenciados
+   hasta que el error.tsx (creado en esta sesión) empezó a
+   capturarlos. React 19 en producción los silenciaba.
+   Archivos: app/tienda/[slug]/components/ProductDetailModal.tsx,
+             app/tienda/[slug]/components/CartSidebar/CartConfirmModal.tsx
+
+7. ✅ RESUELTO (2026-10-16): 403 en tracking de comprador.
+   Causa: el endpoint /delivery/assignments/order/:orderId
+   validaba con ownership.assertCanReadAssignment, que NO
+   incluye al buyer (solo admin/repartidor).
+   Fix: nuevo endpoint público /delivery/tracking/order/:orderId
+   + /delivery/tracking/order/:orderId/eta que validan con
+   ownership.canTrackOrder (buyer dueño, admin del tenant, o
+   repartidor asignado). Devuelve datos sanitizados (sin
+   driverId, sin notes, sin email/teléfono del driver, solo
+   firstName).
+   Archivos: apps/backend/src/modules/delivery/delivery-drivers.controller.ts,
+             apps/backend/src/modules/delivery/delivery-drivers.service.ts,
+             apps/frontend/hooks/useOrderTracking.ts
+
+8. DEUDA FALSA — ActiveStore.tsx (admin/settings):
+   El inventario original contaba 3 <select> en este archivo.
+   En realidad son 1 widget de hora (HH:MM AM/PM) que se repite
+   ~14 veces en el componente, renderizado por la función
+   renderTimeSelector. NO migrar a SearchableDropdown porque:
+   - Son 2-12 opciones fijas literales (no diccionarios).
+   - El <select> nativo abre el picker nativo del SO en mobile
+     (rueda de iOS, spinner de Android) → UX superior.
+   - Migrar empeoraría la UX (3 dropdowns custom anidados,
+     ocuparía 3× más espacio horizontal).
+   - Es el mismo patrón que usan los navegadores nativos.
+
+9. DEUDA FALSA — CartPaymentStep.tsx (tienda pública):
+   Tiene 4 <select>, pero solo 2 son migrables. Los otros 2:
+   - field.type === 'select' (línea ~917): render dinámico
+     de paymentMethods.ts. No tiene primary/isDarkBg/textColor
+     disponibles en el scope (es una función helper, no recibe
+     props de tema). Cambiarlo requiere rediseñar el sistema
+     de campos dinámicos → fuera de alcance.
+   - Selector de cuenta Pago Móvil (línea ~1286): usa índice
+     numérico (Number(e.target.value)), no string. Solo aparece
+     si pagoMovilList.length > 1 (1 cuenta por defecto). El
+     SearchableDropdown espera string. Requiere conversión
+     número ↔ string → complejidad innecesaria.
+
+10. optionStyle huérfano: en los archivos migrados de
+    SearchableDropdown, quedaron hooks useThemedOptionStyle()
+    que ya no se usan (los selects nativos desaparecieron).
+    Archivos afectados:
+      - StepContactAccount.tsx
+      - OwnerInfoSection.tsx
+      - StepBuyerGeneralInfo.tsx
+      - PaymentMethods.tsx
+      - MultiplePagoMovil.tsx (onboarding y admin)
+      - CartPaymentStep.tsx
+    Propuesta: limpiar en una sesión de "cleanup" (grep
+    "optionStyle" y "useThemedOptionStyle" para identificarlos).
+
+11. DEUDA FALSA — TimeSelect (ServiceInventorySection.tsx
+    y ServiceEditModal.tsx):
+    El inventario original contaba 1 <select> en
+    ServiceInventorySection.tsx (línea 136) y 1 en
+    ServiceEditModal.tsx (línea 378). Ambos son el mismo
+    componente custom TimeSelect que renderiza un <select>
+    nativo con chevron integrado (ChevronDownIcon + absolute).
+    NO migrar a SearchableDropdown porque:
+    - Es un componente custom reutilizable (widget de hora).
+    - Tiene 1 opción por vez (TIME_OPTIONS son horas
+      específicas).
+    - El <select> nativo abre el picker nativo del SO en
+      mobile (rueda de iOS, spinner de Android) → UX superior.
+    - Migrar rompería el diseño del calendario (w-28, chevron
+      posicionado con absolute).
+    - Los <select> nativos de horarios son UX estándar (como
+      Google Calendar).
+    Es el mismo patrón que ActiveStore.tsx (deuda falsa #8)
+    y CartPaymentStep.tsx (deuda falsa #9).
+
+________________________________________
+15. HISTORIAL DE CAMBIOS
+________________________________________
+
+📅 10/10/2026 — v3.0
+  - Rediseño UCP (fulfillment + cobro a destino).
+  - Roles y visibilidad en la UI.
+  - Auth System (Fases 1-7).
+
+📅 13/10/2026 — v4.0 (esta sesión)
+  - Optimizaciones de performance en Home, Admin y Mi Cuenta.
+  - Fix: ServiceCatalog hereda color del tema.
+  - Fix: scroll horizontal de la tabla de inventario.
+  - Sidebar colapsado con labels cortos.
+  - 12 scripts nuevos con aliases cortos.
+  - Modo quirúrgico documentado (sección 0).
+  - Warnings conocidos documentados (sección 14).
+  - Manual reestructurado a 15 secciones.
+
+  📅 16/10/2026 — v4.1 (sesión de migración de dropdowns)
+
+  MIGRACIÓN DE <select> A SearchableDropdown:
+  - Tanda 2 (Onboarding): 10 selects migrados en 5 archivos.
+    - StepContactAccount.tsx (1)
+    - OwnerInfoSection.tsx (1)
+    - StepBuyerGeneralInfo.tsx (2)
+    - PaymentMethods.tsx (3)
+    - MultiplePagoMovil.tsx (3)
+  - Tanda 3 (Admin Pago Móvil): 3 selects migrados.
+    - MultiplePagoMovil.tsx (admin, 3)
+    - ActiveStore.tsx: NO migrado (widget de hora, deuda falsa).
+  - Tanda 4 (Tienda pública): 5 selects migrados.
+    - productos/page.tsx (1)
+    - servicios/page.tsx (1)
+    - FilterSidebar.tsx (1)
+    - CartPaymentStep.tsx (2 de 4 migrados, 2 deuda falsa)
+  - TOTAL: 18 selects migrados en 10 archivos.
+
+  FIX DE SearchableDropdown.tsx:
+  - Panel: color-mix del --bg-color + backdrop-blur (consistente
+    con StepGeneralInfo).
+  - Prioridad de `secondary` respetada (kiosko, admin, tienda).
+  - Fallback limpio cuando no hay secondary.
+
+  FIX DE ERROR BOUNDARIES:
+  - app/error.tsx y app/global-error.tsx validados (build OK).
+  - Capturan errores preexistentes que React 19 silenciaba.
+  - 2 bugs preexistentes encontrados y arreglados (priceColors
+    en ProductDetailModal, primary en CartConfirmModal).
+
+  FIX DE TRACKING DE COMPRADOR:
+  - Nuevo endpoint /delivery/tracking/order/:orderId (público).
+  - Nuevo endpoint /delivery/tracking/order/:orderId/eta.
+  - Valida con ownership.canTrackOrder (buyer/admin/repartidor).
+  - Devuelve datos sanitizados (sin driverId, notes, email/tel).
+  - Endpoint viejo (/delivery/assignments/order/:orderId)
+    sigue intacto para admin/repartidor.
+
+  BACKUPS CREADOS EN ESTA SESIÓN:
+  - Múltiples .bak-tanda2, .bak-tanda3, .bak-tanda4, .bak-fix-*
+    en los archivos modificados.
+
+  📅 17/10/2026 — v4.2 (Tanda 5: migración de dropdowns
+     en modales de admin)
+
+  MIGRACIÓN DE <select> A SearchableDropdown:
+  - Tanda 5 (Admin modales grandes): 15 selects migrados en
+    9 archivos.
+    - AssignOrderModal.tsx (2)
+    - EditDriverModal.tsx (2)
+    - CreateDriverModal.tsx (1)
+    - BrandingInfoColumn.tsx (2) + BrandingTab.tsx (props)
+    - ServiceBookingsTab.tsx (1)
+    - OrdersTab.tsx (1)
+    - ServiceInventorySection.tsx (1 de 2, TimeSelect deuda
+      falsa)
+    - OrderDetailModal.tsx (1)
+    - ServiceEditModal.tsx (2 de 3, TimeSelect deuda falsa)
+  - TOTAL ACUMULADO: 33 selects migrados en 20 archivos
+    (tandas 2, 3, 4, 5).
+
+  DEUDAS FALSAS DOCUMENTADAS (4 total):
+  1. ActiveStore.tsx — widget de hora (HH:MM AM/PM).
+  2. CartPaymentStep.tsx — 2 selects (field.type dinámico +
+     selector de cuenta Pago Móvil con índice numérico).
+  3. ServiceInventorySection.tsx — TimeSelect (widget de hora).
+  4. ServiceEditModal.tsx — TimeSelect (widget de hora).
+
+  FIX DE PROPS EN BRANDING:
+  - BrandingInfoColumn.tsx: agregar primary + isDarkBg al
+    interface + destructuring.
+  - BrandingTab.tsx: pasar primary + isDarkBg en
+    infoColumnProps + array de dependencias del useMemo.
+
+  BACKUPS CREADOS EN ESTA SESIÓN:
+  - Múltiples .bak-tanda5 en los 9 archivos modificados.
+
+    ________________________________________
+16. SEARCHABLEDROPDOWN — COMPONENTE UNIFICADO
+________________________________________
+
+📅 Fecha de introducción: 2026-10-16
+🎯 Objetivo: reemplazar los <select> nativos por un componente
+   custom que herede el tema del tenant, tenga búsqueda, y sea
+   consistente en todo el proyecto.
+
+📁 UBICACIÓN
+
+  components/ui/SearchableDropdown.tsx
+
+📝 API
+
+```typescript
+interface SearchableDropdownOption {
+  value: string;
+  label: string;
+}
+
+interface SearchableDropdownProps {
+  // Obligatorios
+  value: string;
+  onChange: (value: string) => void;  // recibe STRING, no event
+  options: SearchableDropdownOption[];
+
+  // Tema (obligatorios salvo secondary y borderColor)
+  primary: string;        // color del tenant (hex o var(--...))
+  textColor: string;      // color CSS, no clase Tailwind
+  isDarkBg: boolean;
+  secondary?: string;     // opcional: si viene, se usa como bg del panel
+  borderColor?: string;   // opcional: si no, se deriva de isDarkBg
+
+  // Opcionales
+  placeholder?: string;          // default: 'Seleccionar...'
+  searchPlaceholder?: string;    // default: 'Filtrar...'
+  emptyMessage?: string;         // default: 'No hay opciones'
+  searchable?: boolean;          // default: true
+  footerLabel?: (count: number) => string;
+  renderLabel?: (opt: SearchableDropdownOption | null) => ReactNode;
+  disabled?: boolean;
+}
+
+📊 COBERTURA ACTUAL (17/10/2026)
+
+El componente SearchableDropdown está aplicado en 20 archivos
+del proyecto (33 selects migrados), cubriendo:
+- Onboarding (tanda 2): 10 selects en 5 archivos.
+- Admin Pago Móvil (tanda 3): 3 selects en 2 archivos.
+- Tienda pública (tanda 4): 5 selects en 4 archivos.
+- Admin modales (tanda 5): 15 selects en 9 archivos.
+
+Deudas falsas restantes (NO migrar):
+- TimeSelect (2 ocurrencias): widget de hora con chevron.
+- ActiveStore time selector (~14 ocurrencias): widget de hora.
+- CartPaymentStep field.type dinámico (1 ocurrencia).
+- CartPaymentStep selector cuenta Pago Móvil (1 ocurrencia).
+
+Total: 4 deudas falsas documentadas en sección 14.
+
+________________________________________
+11. FASE K — CANALES DE VENTA (KIOSK/ONLINE)
+________________________________________
+
+📅 Fecha de implementación: 19/10/2026
+🎯 Objetivo: separar los flujos de kiosco (POS presencial) y tienda online.
+   Cada producto/servicio puede estar disponible en uno, en otro, o en ambos.
+   El kiosco y la tienda comparten catálogo pero filtran por canal.
+
+📌 MODELO DE DATOS
+
+Productos (tabla products):
+  - availableKiosk BOOLEAN DEFAULT true
+  - availableOnline BOOLEAN DEFAULT true
+
+Servicios (tabla services):
+  - availableKiosk BOOLEAN DEFAULT true
+  - availableOnline BOOLEAN DEFAULT true
+  - serviceModality sigue siendo descriptivo (Presencial / A Domicilio / Online / Híbrido)
+
+Reglas de canal:
+  Kiosk acepta: productos con availableKiosk=true y servicios con availableKiosk=true
+  Kiosk RECHAZA (defensa en profundidad): servicios con serviceModality='A Domicilio' o 'Online / Virtual'
+  Tienda online acepta: productos con availableOnline=true y servicios con availableOnline=true
+
+🎨 UI ADMIN
+
+  - Form crear/editar producto → 2 toggles: "Disponible en kiosco" + "Disponible en tienda online"
+  - Form crear/editar servicio → 2 toggles idénticos
+  - Tabla productos/servicios → columna "Canales" con badges K (kiosco) y W (online)
+  - Header admin → al activar kiosco, valida que haya ≥1 item disponible.
+    Si no → toast de error y no se activa.
+
+🔒 VALIDACIONES BACKEND
+
+  createOrder:
+    - si source='kiosk' y algún item tiene availableKiosk=false → 400
+    - si source='kiosk' y algún servicio tiene serviceModality='A Domicilio'/'Online / Virtual' → 400
+    - si source='kiosk' → fulfillment forzado a 'pickup'
+
+  createBooking:
+    - si source='kiosk' y serviceModality in ('A Domicilio', 'Online / Virtual') → 400
+
+📁 ARCHIVOS MODIFICADOS
+
+Backend:
+  - src/modules/products/entities/product.entity.ts (nuevos campos)
+  - src/modules/products/dto/create-product.dto.ts (nuevos campos)
+  - src/modules/products/products.controller.ts (updateStatus + updateDto)
+  - src/modules/products/products.service.ts (findPublicByTenant, findAllPublic,
+    findAllPublicServices, findPublicPricedByTenant filtran availableOnline)
+  - src/modules/services/entities/service.entity.ts (nuevos campos)
+  - src/modules/services/dto/create-service.dto.ts (nuevos campos)
+  - src/modules/services/services.controller.ts (createDto + updateDto + updateStatus)
+  - src/modules/orders/orders.service.ts (create: validación kiosk)
+  - src/modules/bookings/bookings.service.ts (create: validación kiosk)
+  - src/migrations/1790000011000-AddChannelsToProducts.ts
+  - src/migrations/1790000011001-AddChannelsToServices.ts
+
+Frontend:
+  - app/admin/[slug]/components/catalog/item-form/BasicInfoSection.tsx
+  - app/admin/[slug]/components/catalog/item-form/ServiceInfoSection.tsx
+  - app/admin/[slug]/components/catalog/CatalogTab.tsx
+  - app/admin/[slug]/components/catalog/inventory/ItemEditModal.tsx
+  - app/admin/[slug]/components/catalog/inventory/ServiceEditModal.tsx
+  - app/admin/[slug]/components/catalog/inventory/ItemInventoryTable.tsx
+  - app/admin/[slug]/components/catalog/inventory/ServiceInventoryTable.tsx
+  - app/admin/[slug]/components/catalog/inventory/table/ServiceInventoryHeader.tsx
+  - app/admin/[slug]/page.tsx (handleKioskToggleFromHeader: validación)
+  - app/tienda/kiosko/page.tsx (processedFilteredProducts + filteredKioskServices)
+
+⚠️ LECCIONES APRENDIDAS DURANTE K
+
+1. **`dist/` vs proceso vivo.** Cuando el código cambia pero el comportamiento
+   no, verificar `ps -eo pid,lstart | grep node` vs `ls -la dist/...js`. Si
+   el proceso es anterior al dist, hace falta rebuild completo.
+
+2. **Scripts Node con regex multilínea son frágiles.** Para insertar líneas
+   en posiciones específicas, `sed -i '<num>a\...'` es más robusto. Y siempre
+   verificar con `sed -n '<ini>,<fin>p'` antes de tocar.
+
+3. **`source.ts` puede tener indentación distinta a la esperada.** Usar
+   `sed -n` para ver la zona antes de tocar, nunca "buscar y reemplazar" a ciegas.
+
+4. **Productos con tenantId inconsistente.** El path de imágenes (`/uploads/<tenantId>/...`)
+   puede no coincidir con el `tenantId` de la fila. Verificar con:
+   q "SELECT id, name, \"tenantId\", \"mediaUrls\"[1] FROM products WHERE \"mediaUrls\"[1] IS NOT NULL AND \"mediaUrls\"[1] NOT LIKE '%' || \"tenantId\" || '%';"
+
+📋 DEUDA TÉCNICA ANOTADA DURANTE K (ver sección 14)
+
+12. `bookings.service.ts` líneas ~508 y ~554 usan `serviceModality === 'domicilio'`
+    pero el valor real es `'A Domicilio'`. El auto-asignado de profesional
+    para bookings a domicilio NUNCA corre. Fase K.
+    Fix propuesto: cambiar `'domicilio'` por `'A Domicilio'` en ambos lugares.
+
+13. Data-fix: Cyberpunk 2077 reasignado de Abasto Sol a Pixel Pulse.
+    Verificar consistencia de `tenantId` vs path de imágenes en el futuro:
+    q "SELECT id, name, \"tenantId\", \"mediaUrls\"[1] FROM products WHERE \"mediaUrls\"[1] IS NOT NULL AND \"mediaUrls\"[1] NOT LIKE '%' || \"tenantId\" || '%';"
+
+14. Fase K no tiene tests automatizados. Validación manual documentada en
+    sección 11 (Test de regresión).
+
+12. `bookings.service.ts` líneas ~508 y ~554 usan `serviceModality === 'domicilio'`
+    pero el valor real es `'A Domicilio'` (capitalizado). El auto-asignado de
+    profesional para bookings a domicilio NUNCA corre. Anotado, no arreglado en K.
+
+13. Data-fix aplicado: producto Cyberpunk 2077 (id `e5d73dcd-...`) pertenecía a
+    Abasto Sol pero debía estar en Pixel Pulse. Reasignado con UPDATE. Las
+    imágenes siguen en `/uploads/a523271c-.../` (que coincide con Pixel Pulse).
+
+14. `findAllPublic` y `findAllPublicServices` filtran `availableOnline` para la
+    home pública. Si en el futuro se quiere promocionar servicios "solo kiosco"
+    en la home, revisar este filtro.
+
+15. **Tests automatizados**: siguen sin existir. Fase K se validó manualmente
+    con curl + queries SQL. Propuesta: agregar Playwright para los 3 canales.
+
+🧪 TEST DE REGRESIÓN (recomendado después de deploy)
+
+  1. Producto con availableKiosk=true, availableOnline=false
+     → aparece en kiosko, NO en tienda.
+
+  2. Producto con availableKiosk=false, availableOnline=true
+     → NO en kiosko, SÍ en tienda.
+
+  3. Producto con ambos true → aparece en ambos.
+
+  4. Producto con ambos false (pero status='published')
+     → no aparece en ninguno.
+
+  5. Activar kiosco sin items disponibles → toast de error, no se activa.
+
+  6. Orden kiosk → fulfillment='pickup' en paymentMetadata.
+     No debe aparecer en GET /delivery/assignments/pending.
+
+  7. Orden web con encomienda → fulfillment='shipping'.
+
+________________________________________
+FIN DEL MANUAL v4.0
+________________________________________

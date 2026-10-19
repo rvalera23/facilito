@@ -1,0 +1,34 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: facilito_postgres
+    restart: always
+    environment:
+      POSTGRES_USER: facilito_admin
+      POSTGRES_PASSWORD: facilito_secure_password_2026
+      POSTGRES_DB: facilito_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks:
+      - facilito-net
+
+  redis:
+    image: redis:7-alpine
+    container_name: facilito_redis
+    restart: always
+    ports:
+      - "6379:6379"
+    volumes:
+      - redisdata:/data
+    networks:
+      - facilito-net
+
+volumes:
+  pgdata:
+  redisdata:
+
+networks:
+  facilito-net:
+    driver: bridge
